@@ -1,5 +1,3 @@
-# Ineqaulity task - week 4
-
 ### Read in data:
 
 Located within the Data folder:
@@ -13,10 +11,10 @@ library(tidyverse)
 library(sf)
 library(here)
 library(janitor)
-#library(countrycode)
 ```
 
 ```{r}
+# read r we can change into python
 HDI <- read_csv(here::here("homework_4", "HDR21-22_Composite_indices_complete_time_series.csv"),
                        locale = locale(encoding = "latin1"),
                        na = " ", skip=0)
