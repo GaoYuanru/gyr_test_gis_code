@@ -1,0 +1,252 @@
+---
+title: "Name: Yuanru Gao"
+author: 
+- |
+     | Student number: 22227790
+date: "`r format(Sys.time(), '%X, %d %B, %Y')`"
+output: 
+  html_document: default
+  pdf_document: default
+---
+# Originality declaration  
+
+I, [**Yuanru Gao**], confirm that the work presented in this assessment is my own. Where information has been derived from other sources, I confirm that this has been indicated in the work.
+
+date: [insert the date]
+
+# Initial project scope
+-Introduction part 
+As excessive police violence can lead to serious public safety problems, there has been a dramatic increase in the New York city(Sewell, A. A.,2016). New York Stop, Question and Frisk Data point data(.csv) and NYC polygon(.shp) data are available. The study can be analysed based on these two datasets. A review of the literature shows that researchers in this field would classify such problems into 2 categories and mostly consider the impact of social and individual factors on this situation.  This study will provide an in-depth analysis of the individual aspects, considering What individual factors influence Stop, Question and Frisk in NYC.
+-Research question
+So my research question is whether the sqf data is spatially clustered and what spatial correlation it presents. Whether the suspect's height is linearly related to the occurrence of sqf events in precincts level.
+-Hypothesis
+
+Q：Is there any linear relationship between sqf and suspect's height
+
+H0 (Null Hypothesis): sqf and suspect's height has linear relationship
+
+H1 (Alternative Hypothesis): sqf and suspect's height has no linear relationship
+-The main dataset for the analysis
+sqf-2021.csv :
+resource:https://www.nyc.gov/site/nypd/stats/reports-analysis/stopfrisk.page
+These data were originally collected by New York Police Department officers and record information gathered as a result of stop question and frisk (SQF) encounters during 2021. The data contains 83 variables.
+Police Precincts(.shp): 
+resoure:https://data.cityofnewyork.us/Public-Safety/Police-Precincts/78dh-3ptz
+This data is the New York City polygon data with precincts attribute.
+-Method 
+Based on the research experience of other researchers and the analysis of the data types and data meanings of all the data. This research was explored using global spatial autocorrelation, local spatial autocorrelation, hypothesis testing and linear regression.
+-Limitation:
+However, we have just a little quantitative data to do linear regression analysis.
+
+
+```{r packages}
+#read packages
+library(spatstat)
+library(here)
+library(sp)
+library(rgeos)
+library(maptools)
+library(tmap)
+library(sf)
+library(janitor)
+library(tmaptools)
+library(tidyverse)
+library(dplyr)
+library(raster)
+library(fpc)
+library(tidyselect)
+library(RColorBrewer)
+library(spdep)
+```
+
+```{r load data}
+# read the .csv file
+sqfdata <- read.csv("data/sqf-2021.csv", na = c("","NULL","NA","N/A","(null)"))
+# read shapefile
+NewYork_Police <-st_read(here::here( "data/Police Precincts/geo_export_931a33b8-b7cb-4b6c-8063-56a7b650486f.shp"))
+
+```
+```{r transform}
+# Transforming Data
+NewYork_Police_projected <- NewYork_Police %>%
+  st_transform(., 2908)
+summary(NewYork_Police_projected)
+points <- sqfdata%>%
+  st_as_sf(., coords = c("STOP_LOCATION_X", "STOP_LOCATION_Y"), 
+                   crs = 2908)
+
+```
+```{r points plot}
+# plot points
+tmap_mode("plot")
+tm_shape(NewYork_Police_projected) +
+  tm_polygons(col = NA, alpha = 0.5) +
+tm_shape(points) +
+  tm_dots(col = "blue")
+```
+```{r select columns}
+sqf_selected_columns <- dplyr::select(points, STOP_ID, STOP_FRISK_DATE, MONTH2, STOP_WAS_INITIATED, JURISDICTION_DESCRIPTION, SUSPECTED_CRIME_DESCRIPTION, OFFICER_EXPLAINED_STOP_FLAG, SUSPECT_ARRESTED_FLAG, SUSPECT_ARREST_OFFENSE, FRISKED_FLAG, SEARCHED_FLAG, ASK_FOR_CONSENT_FLG, CONSENT_GIVEN_FLG, OTHER_CONTRABAND_FLAG, WEAPON_FOUND_FLAG, DEMEANOR_OF_PERSON_STOPPED, SUSPECT_REPORTED_AGE, SUSPECT_SEX, SUSPECT_RACE_DESCRIPTION,  STOP_LOCATION_BORO_NAME, geometry, SUSPECT_HEIGHT, SUSPECT_WEIGHT)
+sqf_selected_columns_del <- na.omit(sqf_selected_columns)
+# plot select points
+tmap_mode("plot")
+tm_shape(NewYork_Police_projected) +
+  tm_polygons(col = NA, alpha = 0.5) +
+tm_shape(sqf_selected_columns_del) +
+  tm_dots(col = "blue")
+sqf_selected_columns_del_out <- sqf_selected_columns_del[NewYork_Police_projected,]
+```
+We can know that points are dense in the Midwest
+```{r Spatial autocorrelation}
+# Spatial autocorrelation
+points_sf_joined <- NewYork_Police_projected%>%
+  st_join(points)%>% #join two data
+  add_count(precinct)%>% #count the number based on precinct
+  mutate(area=st_area(.))%>%
+  mutate(density=n/area)%>%
+  dplyr::select(STOP_LOCATION_PATROL_BORO_NAME, precinct, density, n, area)%>% #select certain columns
+  group_by(precinct)%>%
+summarise(STOP_LOCATION_PATROL_BORO_NAME = first(STOP_LOCATION_PATROL_BORO_NAME),
+precinct= first(precinct),
+density= first(density),
+area= first(area),
+n= first(n))
+
+
+  
+  
+```
+Global spatial autocorrelation describes the overall distribution and determines whether an attribute is characterised by aggregation in a particular region. Local autocorrelation is a way to see where significant aggregation occurs.
+The large amount of data is suitable for mean calculation and Moran's I is better than Getis for spatial weighting, so Moran's I is chosen to analyse autocorrelation.
+```{r Spatial autocorrelation plot}
+
+tm_shape(points_sf_joined) +
+    tm_polygons("density",
+        style="jenks",
+        palette="PuOr",
+        midpoint=NA,
+        popup.vars=c("precinct", "density"),
+        title="Density")
+```
+From this graph, we know that we might have some clustering of sqf in the centre of NYC. 
+```{r centroids}
+#First calculate the centroids of points in London
+
+coordsW <- points_sf_joined%>%
+  st_centroid()%>%
+  st_geometry()
+  
+plot(coordsW,axes=TRUE)
+```
+```{r neighbours list}
+#create a neighbours list
+sqf_nb <- points_sf_joined %>%
+  poly2nb(., queen=T)
+summary(sqf_nb)
+```
+average number of neighbours is 4.25974
+```{r plot}
+#plot this map
+plot(sqf_nb, st_geometry(coordsW), col="red")
+#add a map underneath
+plot(points_sf_joined$geometry, add=T)
+```
+## spatial weights matrix
+```{r spatial weights matrix}
+#create a spatial weights matrix from these weights
+sqf.lw <- sqf_nb %>%
+  nb2mat(., style="B")
+
+sum(sqf.lw)
+sum(sqf.lw[1,])
+sqf.lw <- sqf_nb %>%
+  nb2listw(., style="C")
+```
+
+We have 328 neighbours. Now if we were to do global standardisation this would mean dividing our 77 wards by the total number of neighbours meaning each spatial weight has a value of 0.234.Row 1 here sums to 3, meaning each weight would be 0.33 in row 1.
+
+```{r Moran's I}
+# Moran's I
+I_sqf_Global_Density <- points_sf_joined %>%
+  pull(density) %>%
+  as.vector()%>%
+  moran.test(., sqf.lw)
+
+I_sqf_Global_Density
+```
+```{r Local Moran's I}
+# Local Moran's I
+
+I_sqf_Local_count <- points_sf_joined %>%
+  pull(n) %>%
+  as.vector()%>%
+  localmoran(., sqf.lw)%>%
+  as_tibble()
+
+I_sqf_Local_Density <- points_sf_joined %>%
+  pull(density) %>%
+  as.vector()%>%
+  localmoran(., sqf.lw)%>%
+  as_tibble()
+
+
+```
+
+
+```{r}
+slice_head(I_sqf_Local_Density, n=5)
+points_sf_joined <- points_sf_joined %>%
+  mutate(plaque_count_I = as.numeric(I_sqf_Local_count$Ii))%>%
+  mutate(plaque_count_Iz =as.numeric(I_sqf_Local_count$Z.Ii))%>%
+  mutate(density_I =as.numeric(I_sqf_Local_Density$Ii))%>%
+  mutate(density_Iz =as.numeric(I_sqf_Local_Density$Z.Ii))
+summary(points_sf_joined$density_Iz)
+```
+
+
+```{r}
+# Mapping
+breaks1<-c(-1000,-2.58,-1.96,-1.65,1.65,1.96,2.58,1000)
+library(RColorBrewer)
+MoranColours<- rev(brewer.pal(8, "RdGy"))
+tm_shape(points_sf_joined) +
+    tm_polygons("plaque_count_Iz",
+        style="fixed",
+        breaks=breaks1,
+        palette=MoranColours,
+        midpoint=NA,
+        title="Local Moran's I, Stop, Question and Frisk Database in London")
+```
+
+
+
+From this map we can know that precinct 42 and 44 High-High Clustering,which indicates that both of these and their neighbouring areas are high scoring areas Area, precinct 69 is a Low-Low cluster, which means it and its neighbouring areas are low scoring areas Area.
+
+
+
+## linear regression
+```{r linear regression}
+
+q <- qplot(x = `SUSPECT_HEIGHT`, 
+           y = `STOP_ID`, 
+           data=sqf_selected_columns_del_out)
+
+#plot with a regression line - note, I've added some jitter here as the x-scale is rounded
+q + stat_smooth(method="lm", se=FALSE, size=1) + 
+  geom_jitter()
+#let's check the distribution of these variables first
+
+ggplot(sqf_selected_columns_del_out, aes(x=`SUSPECT_HEIGHT`)) + 
+  geom_histogram(aes(y = ..density..),
+                 binwidth = 10) + 
+  geom_density(colour="red", 
+               size=1, 
+               adjust=8)
+               
+
+```
+
+
+
+## Discuss
+Based on the results obtained above we can tell that there is no relationship between the sqf and the height data. From the results of the spatial analysis, we can see that Global spatial autocorrelation is relevant but not significant. This result can help the police precincts to make targeted changes to sqf provisions, such as sqf high concentration areas, which can be appropriately mitigated for inspection, while other areas can maintain the original provisions. The limitation of this study is that I did not do a complete linear regression due to time issues.My hypothesis for the study turned out to be that the H0 hypothesis should be rejected since there is no linear relationship between the two data.
+
